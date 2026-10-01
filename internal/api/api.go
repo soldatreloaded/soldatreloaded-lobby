@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bettersoldat/bettersoldat-lobby/internal/query"
-	"github.com/bettersoldat/bettersoldat-lobby/internal/registry"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/query"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/registry"
 )
 
 // Prober asks a game server the query.
@@ -39,11 +39,13 @@ type Config struct {
 	// MinInterval: a heartbeat sooner than this after the last is taken without
 	// asking the server again.
 	MinInterval time.Duration
-	// TrustProxy takes the client's address from X-Forwarded-For's last entry: only
-	// behind a reverse proxy that sets it.
-	TrustProxy bool
-	Now        func() time.Time
-	Log        *slog.Logger
+	// ClientIPHeader takes the client's address from this header rather than the
+	// connection: only behind a proxy that sets it and strips a client's own. For
+	// X-Forwarded-For the last entry is taken, the one the nearest proxy appended;
+	// any other header (Fly-Client-IP, X-Real-IP) is taken whole. Empty for none.
+	ClientIPHeader string
+	Now            func() time.Time
+	Log            *slog.Logger
 }
 
 type handler struct{ Config }
@@ -92,11 +94,16 @@ type ServerJSON struct {
 // The address the request came from, as ENet can reach it: IPv4 only, as ENet 1.3 is.
 func (h *handler) source(r *http.Request) (netip.Addr, error) {
 	raw := r.RemoteAddr
-	if h.TrustProxy {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			parts := strings.Split(fwd, ",")
-			raw = strings.TrimSpace(parts[len(parts)-1])
+	if h.ClientIPHeader != "" {
+		v := r.Header.Get(h.ClientIPHeader)
+		if v == "" {
+			return netip.Addr{}, errors.New("no " + h.ClientIPHeader + " from the proxy")
 		}
+		if http.CanonicalHeaderKey(h.ClientIPHeader) == "X-Forwarded-For" {
+			parts := strings.Split(v, ",")
+			v = parts[len(parts)-1]
+		}
+		raw = strings.TrimSpace(v)
 	}
 	if host, _, err := net.SplitHostPort(raw); err == nil {
 		raw = host

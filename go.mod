@@ -1,3 +1,3 @@
-module github.com/bettersoldat/bettersoldat-lobby
+module github.com/soldatreloaded/soldatreloaded-lobby
 
 go 1.27.0

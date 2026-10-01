@@ -1,4 +1,4 @@
-// The bettersoldat lobby: the list of game servers a server browser shows. See README.md.
+// The soldatreloaded lobby: the list of game servers a server browser shows. See README.md.
 package main
 
 import (
@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bettersoldat/bettersoldat-lobby/internal/api"
-	"github.com/bettersoldat/bettersoldat-lobby/internal/query"
-	"github.com/bettersoldat/bettersoldat-lobby/internal/registry"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/api"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/query"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/registry"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 	ttl := flag.Duration("ttl", 95*time.Second, "how long a server stays listed after its last heartbeat")
 	probeTimeout := flag.Duration("probe-timeout", 2*time.Second, "how long to wait for a game server to answer the query")
 	maxPerIP := flag.Int("max-per-ip", 16, "the most servers listed from one address")
-	trustProxy := flag.Bool("trust-proxy", false, "take the client's address from X-Forwarded-For (only behind a proxy that sets it)")
+	clientIPHeader := flag.String("client-ip-header", "", "take the client's address from this header, e.g. Fly-Client-IP (only behind a proxy that sets it)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -35,10 +35,10 @@ func main() {
 			info, _, err := query.Probe(ctx, addr, *probeTimeout)
 			return info, err
 		},
-		Heartbeat:   *heartbeat,
-		MinInterval: *heartbeat / 3,
-		TrustProxy:  *trustProxy,
-		Log:         log,
+		Heartbeat:      *heartbeat,
+		MinInterval:    *heartbeat / 3,
+		ClientIPHeader: *clientIPHeader,
+		Log:            log,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

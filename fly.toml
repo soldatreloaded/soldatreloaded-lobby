@@ -1,0 +1,38 @@
+# Fly.io: one machine, always on. The list lives in memory, so a second machine would
+# hold half of it and a stopped one would forget it; deploy with --ha=false.
+#
+#   fly launch --no-deploy --copy-config --name <your-app>
+#   fly deploy --ha=false
+
+app = "soldatreloaded-lobby"
+primary_region = "iad"
+
+[build]
+
+[processes]
+  # Behind Fly's proxy the connection is the proxy's; Fly-Client-IP is the server's own.
+  app = "-listen :8080 -client-ip-header Fly-Client-IP"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "15s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "2s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

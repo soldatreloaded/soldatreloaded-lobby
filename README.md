@@ -1,7 +1,7 @@
-# bettersoldat-lobby
+# soldatreloaded-lobby
 
-The list of [bettersoldat](https://github.com/bettersoldat/bettersoldat) game servers
-that a server browser shows.
+The list of [soldatreloaded](https://github.com/soldatreloaded/soldatreloaded) game
+servers that a server browser shows.
 
 ```
 go run . -listen :8080
@@ -45,6 +45,32 @@ querying the server again.
 | `-ttl` | `95s` | how long a server stays listed after its last heartbeat |
 | `-probe-timeout` | `2s` | how long to wait for the query's answer, across three tries |
 | `-max-per-ip` | `16` | the most servers listed from one address |
-| `-trust-proxy` | `false` | take the source address from `X-Forwarded-For`'s last entry. Use only behind a reverse proxy that sets it |
+| `-client-ip-header` | none | take the source address from this header instead of the connection: `Fly-Client-IP` on Fly, `X-Real-IP` or `X-Forwarded-For` (its last entry) behind nginx or Caddy. Set it only behind a proxy that sets the header, or anyone can list someone else's address |
 
-Run it behind a TLS-terminating proxy (Caddy, nginx) with `-trust-proxy` in production.
+## Deploy
+
+**Fly.io.** `fly.toml` is ready, with `Fly-Client-IP` already set:
+
+```
+fly launch --no-deploy --copy-config --name <your-app>
+fly deploy --ha=false
+```
+
+Run exactly one machine. The list lives in memory, so a second machine would hold
+half of it. That is why `--ha=false` is needed and why `fly.toml` never auto-stops
+the machine.
+
+Game servers must reach the lobby over **IPv4**, because ENet 1.3 can't be reached
+over IPv6 and the lobby rejects an IPv6 heartbeat. Either have the server's heartbeat
+force IPv4 (curl's `CURLOPT_IPRESOLVE`), or release the app's IPv6 address so that
+only the shared IPv4 one remains (`fly ips list`, then `fly ips release <v6>`).
+
+**Anywhere else.** Use the Dockerfile:
+
+```
+docker build -t soldatreloaded-lobby .
+docker run -p 8080:8080 soldatreloaded-lobby
+```
+
+Put it behind a TLS-terminating proxy and pass `-client-ip-header` to match that
+proxy, e.g. `docker run ... soldatreloaded-lobby -listen :8080 -client-ip-header X-Real-IP`.

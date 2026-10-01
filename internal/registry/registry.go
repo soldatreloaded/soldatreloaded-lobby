@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bettersoldat/bettersoldat-lobby/internal/query"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/query"
 )
 
 // Server is one listing.

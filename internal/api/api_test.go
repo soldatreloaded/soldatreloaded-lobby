@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bettersoldat/bettersoldat-lobby/internal/query"
-	"github.com/bettersoldat/bettersoldat-lobby/internal/registry"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/query"
+	"github.com/soldatreloaded/soldatreloaded-lobby/internal/registry"
 )
 
 type rig struct {
@@ -24,7 +24,7 @@ type rig struct {
 	up     map[uint16]query.Info // the ports answering, and what they say
 }
 
-func newRig(trustProxy bool) *rig {
+func newRig(clientIPHeader string) *rig {
 	g := &rig{now: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), up: map[uint16]query.Info{}}
 	g.h = New(Config{
 		Registry: registry.New(90*time.Second, 2),
@@ -35,11 +35,11 @@ func newRig(trustProxy bool) *rig {
 			}
 			return query.Info{}, errors.New("silence")
 		},
-		Heartbeat:   30 * time.Second,
-		MinInterval: 10 * time.Second,
-		TrustProxy:  trustProxy,
-		Now:         func() time.Time { return g.now },
-		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Heartbeat:      30 * time.Second,
+		MinInterval:    10 * time.Second,
+		ClientIPHeader: clientIPHeader,
+		Now:            func() time.Time { return g.now },
+		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	return g
 }
@@ -66,7 +66,7 @@ func (g *rig) list(t *testing.T) []ServerJSON {
 }
 
 func TestHeartbeatListsAReachableServer(t *testing.T) {
-	g := newRig(false)
+	g := newRig("")
 	g.up[23073] = query.Info{Hostname: "Ash", Map: "ctf_Ash", Players: 4, MaxPlayers: 32, Protocol: 9}
 	w := g.do("POST", "/v1/servers", "203.0.113.5:51234", `{"port":23073}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"heartbeat_seconds":30`) {
@@ -92,7 +92,7 @@ func TestHeartbeatListsAReachableServer(t *testing.T) {
 }
 
 func TestUnreachableIsNotListed(t *testing.T) {
-	g := newRig(false)
+	g := newRig("")
 	if w := g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":23073}`); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("an unreachable server: %d", w.Code)
 	}
@@ -102,7 +102,7 @@ func TestUnreachableIsNotListed(t *testing.T) {
 }
 
 func TestBadRequests(t *testing.T) {
-	g := newRig(false)
+	g := newRig("")
 	for _, c := range []struct{ from, body string }{
 		{"203.0.113.5:1", `{"port":0}`},
 		{"203.0.113.5:1", `not json`},
@@ -118,7 +118,7 @@ func TestBadRequests(t *testing.T) {
 }
 
 func TestPerIPLimitAndRemove(t *testing.T) {
-	g := newRig(false)
+	g := newRig("")
 	for p := uint16(1); p <= 3; p++ {
 		g.up[p] = query.Info{}
 	}
@@ -135,14 +135,25 @@ func TestPerIPLimitAndRemove(t *testing.T) {
 	}
 }
 
-func TestTrustProxy(t *testing.T) {
-	g := newRig(true)
+func TestClientIPHeader(t *testing.T) {
+	g := newRig("X-Forwarded-For")
 	g.up[23073] = query.Info{}
 	g.do("POST", "/v1/servers", "127.0.0.1:1", `{"port":23073}`, "X-Forwarded-For", "6.6.6.6, 203.0.113.9")
 	if len(g.probed) != 1 || g.probed[0].Addr().String() != "203.0.113.9" {
 		t.Fatalf("probed %v: the proxy's last entry", g.probed)
 	}
-	g = newRig(false)
+
+	g = newRig("Fly-Client-IP")
+	g.up[23073] = query.Info{}
+	g.do("POST", "/v1/servers", "172.16.0.2:1", `{"port":23073}`, "Fly-Client-IP", "203.0.113.7")
+	if len(g.probed) != 1 || g.probed[0].Addr().String() != "203.0.113.7" {
+		t.Fatalf("probed %v: Fly-Client-IP whole", g.probed)
+	}
+	if w := g.do("POST", "/v1/servers", "172.16.0.2:1", `{"port":23073}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("no header from the proxy: %d, want 400 rather than the proxy's own address", w.Code)
+	}
+
+	g = newRig("")
 	g.up[23073] = query.Info{}
 	g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":23073}`, "X-Forwarded-For", "6.6.6.6")
 	if g.probed[0].Addr().String() != "203.0.113.5" {

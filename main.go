@@ -24,6 +24,7 @@ func main() {
 	ttl := flag.Duration("ttl", 95*time.Second, "how long a server stays listed after its last heartbeat")
 	probeTimeout := flag.Duration("probe-timeout", 2*time.Second, "how long to wait for a game server to answer the query")
 	maxPerIP := flag.Int("max-per-ip", 16, "the most servers listed from one address")
+	probesPerMinute := flag.Int("probes-per-minute", 30, "the most probes one requester's heartbeats may cause in a minute; 0 for no limit")
 	clientIPHeader := flag.String("client-ip-header", "", "take the client's address from this header, e.g. Fly-Client-IP (only behind a proxy that sets it)")
 	flag.Parse()
 
@@ -35,10 +36,11 @@ func main() {
 			info, _, err := query.Probe(ctx, addr, *probeTimeout)
 			return info, err
 		},
-		Heartbeat:      *heartbeat,
-		MinInterval:    *heartbeat / 3,
-		ClientIPHeader: *clientIPHeader,
-		Log:            log,
+		Heartbeat:       *heartbeat,
+		MinInterval:     *heartbeat / 3,
+		ProbesPerMinute: *probesPerMinute,
+		ClientIPHeader:  *clientIPHeader,
+		Log:             log,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

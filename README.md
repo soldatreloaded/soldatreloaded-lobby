@@ -10,15 +10,20 @@ go test ./...
 
 ## How it works
 
-A game server that wants to be listed sends a heartbeat over HTTP every
-`heartbeat_seconds`, with its game port. The lobby takes the server's address from the
-connection, never from the body, so a server can only list itself. Before listing it,
-the lobby sends the game's **query** to that address and port over UDP. A server that
-doesn't answer is not listed, which is usually a port that isn't forwarded. A server
-stays listed for `-ttl` after its last heartbeat.
+A game server with `sv_public 1` sends a heartbeat over HTTP every
+`heartbeat_seconds`, with its game port. The lobby lists the address the request came
+from, unless the body names one: a server behind a proxy that sends from another
+address than players reach it on (Fly's `fly-global-services`) names the one they reach
+(`sv_lobby_ip`). Either way, before listing it the lobby sends the game's **query** to
+that address and port over UDP, so only a game server that answers there is ever
+listed: naming someone else's address can at most list a real server that wasn't asking
+to be. A server that doesn't answer is not listed, which is usually a port that isn't
+forwarded. A server stays listed for `-ttl` after its last heartbeat. Each requester
+may cause only `-probes-per-minute` probes.
 
-A browser fetches the list, then queries each server itself for its ping and current
-player count. The list's own counts are only as fresh as the last heartbeat.
+The game's browser fetches `servers.txt`, then queries each server itself for its ping
+and current players. The JSON list's own counts are only as fresh as the last
+heartbeat.
 
 The query's bytes are defined in the game's `shared/network/query.h`, and
 `internal/query` reads them. Both repositories test the same golden reply, so a layout
@@ -28,9 +33,10 @@ change that breaks one side fails a test on the other.
 
 | | | |
 |---|---|---|
-| `POST /v1/servers` | `{"port": 23073}` | heartbeat. `200 {"address","port","heartbeat_seconds"}`; `422` unreachable over UDP; `429` too many servers from this address; `400` bad body or an IPv6 source (ENet 1.3 is IPv4 only) |
-| `DELETE /v1/servers` | `{"port": 23073}` | a server going away; `204` |
+| `POST /v1/servers` | `{"port": 23073}`, or `{"port": 23073, "address": "1.2.3.4"}` | heartbeat. `200 {"address","port","heartbeat_seconds"}`; `422` unreachable over UDP; `429` too many servers from this address, or too many probes from this requester; `400` a bad body, a named address that isn't public IPv4, or an IPv6 source with no address named (ENet 1.3 is IPv4 only) |
+| `DELETE /v1/servers` | `{"port": 23073}` | a server going away, from the address it is listed at; `204`. A server listed at a named address is left to expire |
 | `GET /v1/servers` | | `{"servers": [{"address","port","name","map","mode","players","bots","max_players","password","protocol","last_seen"}]}`, fullest first. `mode` is the game's `MatchMode`: 0 deathmatch, 1 capture the flag |
+| `GET /v1/servers.txt` | | the same servers as `1.2.3.4:23073`, one a line: what the game reads |
 | `GET /healthz` | | `ok` |
 
 A heartbeat less than a third of the interval after the last one is accepted without
@@ -45,6 +51,7 @@ querying the server again.
 | `-ttl` | `95s` | how long a server stays listed after its last heartbeat |
 | `-probe-timeout` | `2s` | how long to wait for the query's answer, across three tries |
 | `-max-per-ip` | `16` | the most servers listed from one address |
+| `-probes-per-minute` | `30` | the most probes one requester's heartbeats may cause in a minute; 0 for no limit |
 | `-client-ip-header` | none | take the source address from this header instead of the connection: `Fly-Client-IP` on Fly, `X-Real-IP` or `X-Forwarded-For` (its last entry) behind nginx or Caddy. Set it only behind a proxy that sets the header, or anyone can list someone else's address |
 
 ## Deploy
@@ -60,10 +67,9 @@ Run exactly one machine. The list lives in memory, so a second machine would hol
 half of it. That is why `--ha=false` is needed and why `fly.toml` never auto-stops
 the machine.
 
-Game servers must reach the lobby over **IPv4**, because ENet 1.3 can't be reached
-over IPv6 and the lobby rejects an IPv6 heartbeat. Either have the server's heartbeat
-force IPv4 (curl's `CURLOPT_IPRESOLVE`), or release the app's IPv6 address so that
-only the shared IPv4 one remains (`fly ips list`, then `fly ips release <v6>`).
+Game servers reach the lobby over **IPv4**, because ENet 1.3 can't be reached over
+IPv6. The game's heartbeat forces IPv4 unless it names its address, so the app's IPv6
+address can stay for browsers.
 
 **Anywhere else.** Use the Dockerfile:
 

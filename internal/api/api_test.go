@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,11 +36,12 @@ func newRig(clientIPHeader string) *rig {
 			}
 			return query.Info{}, errors.New("silence")
 		},
-		Heartbeat:      30 * time.Second,
-		MinInterval:    10 * time.Second,
-		ClientIPHeader: clientIPHeader,
-		Now:            func() time.Time { return g.now },
-		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Heartbeat:       30 * time.Second,
+		MinInterval:     10 * time.Second,
+		ProbesPerMinute: 5,
+		ClientIPHeader:  clientIPHeader,
+		Now:             func() time.Time { return g.now },
+		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	return g
 }
@@ -158,5 +160,62 @@ func TestClientIPHeader(t *testing.T) {
 	g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":23073}`, "X-Forwarded-For", "6.6.6.6")
 	if g.probed[0].Addr().String() != "203.0.113.5" {
 		t.Fatal("X-Forwarded-For was believed without a proxy")
+	}
+}
+
+func TestTextList(t *testing.T) {
+	g := newRig("")
+	g.up[1] = query.Info{Players: 2}
+	g.up[2] = query.Info{Players: 7}
+	g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":1}`)
+	g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":2}`)
+	w := g.do("GET", "/v1/servers.txt", "9.9.9.9:1", "")
+	if w.Code != 200 || w.Body.String() != "203.0.113.5:2\n203.0.113.5:1\n" {
+		t.Fatalf("text list: %d %q", w.Code, w.Body)
+	}
+}
+
+func TestNamedAddress(t *testing.T) {
+	g := newRig("")
+	g.up[23073] = query.Info{Hostname: "behind a proxy"}
+	// from an IPv6 egress, naming the IPv4 address players reach it on
+	w := g.do("POST", "/v1/servers", "[2001:db8::1]:1", `{"port":23073,"address":"213.188.216.246"}`)
+	if w.Code != 200 || len(g.probed) != 1 || g.probed[0] != netip.MustParseAddrPort("213.188.216.246:23073") {
+		t.Fatalf("named address: %d, probed %v", w.Code, g.probed)
+	}
+	if list := g.list(t); len(list) != 1 || list[0].Address != "213.188.216.246" {
+		t.Fatalf("list: %+v", list)
+	}
+	for _, bad := range []string{"10.0.0.1", "127.0.0.1", "192.168.1.1", "2001:db8::2", "nonsense", "0.0.0.0"} {
+		if w := g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":23073,"address":"`+bad+`"}`); w.Code != http.StatusBadRequest {
+			t.Errorf("address %s: %d", bad, w.Code)
+		}
+	}
+	if len(g.probed) != 1 {
+		t.Fatalf("a refused address was probed: %v", g.probed)
+	}
+	// nobody takes a named server off the list but time
+	g.do("DELETE", "/v1/servers", "203.0.113.5:1", `{"port":23073,"address":"213.188.216.246"}`)
+	if len(g.list(t)) != 1 {
+		t.Fatal("a DELETE naming an address took it off")
+	}
+}
+
+func TestProbeLimit(t *testing.T) {
+	g := newRig("")
+	for p := uint16(1); p <= 6; p++ {
+		g.do("POST", "/v1/servers", "203.0.113.5:1", fmt.Sprintf(`{"port":%d}`, p)) // nothing answers: every one probes
+	}
+	if len(g.probed) != 5 {
+		t.Fatalf("probed %d times on a limit of 5 a minute", len(g.probed))
+	}
+	if w := g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":7}`); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("past the limit: %d", w.Code)
+	}
+	g.do("POST", "/v1/servers", "198.51.100.1:1", `{"port":7}`)
+	g.now = g.now.Add(time.Minute)
+	g.do("POST", "/v1/servers", "203.0.113.5:1", `{"port":7}`)
+	if len(g.probed) != 7 {
+		t.Fatalf("another requester, then the next minute: probed %d, want 7", len(g.probed))
 	}
 }
